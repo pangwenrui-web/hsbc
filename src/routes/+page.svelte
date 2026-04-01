@@ -10,8 +10,7 @@
 		groupAmountByDate,
 		sumBillingAmount
 	} from '$lib/domain/billing-analytics';
-	import { fetchBillingFromApi } from '$lib/services/sources/api-source';
-	import { loadBillingFromFile } from '$lib/services/sources/file-source';
+	import { billingIngestionService } from '$lib/services/ingestion/billing-ingestion-service';
 	import {
 		allBillingRecords,
 		billingFilters,
@@ -19,7 +18,7 @@
 	} from '$lib/stores/billing-store';
 	import type { BillingFilters } from '$lib/types/billing';
 
-	let fileMessage = $state('请先加载 API 数据，也可以上传 CSV 叠加数据。');
+	let fileMessage = $state('请先加载 API 数据，也可以上传 CSV/XLSX 文件追加数据。');
 	let loading = $state(false);
 
 	const filteredRecords = $derived($filteredBillingRecords);
@@ -39,20 +38,27 @@
 
 	const importApiData = async () => {
 		loading = true;
-		const data = await fetchBillingFromApi();
-		allBillingRecords.set(data);
-		fileMessage = `已从 API 导入 ${data.length} 条记录`;
-		loading = false;
+		try {
+			const data = await billingIngestionService.loadFromApi();
+			allBillingRecords.set(data);
+			fileMessage = `接入层: 已从 API 导入 ${data.length} 条记录`;
+		} finally {
+			loading = false;
+		}
 	};
 
-	const uploadCsv = async (event: Event) => {
+	const uploadFile = async (event: Event) => {
 		const input = event.currentTarget as HTMLInputElement;
 		const file = input.files?.[0];
 		if (!file) return;
 
-		const fromFile = await loadBillingFromFile(file);
-		allBillingRecords.update((prev) => [...prev, ...fromFile]);
-		fileMessage = `已从文件导入 ${fromFile.length} 条记录`;
+		try {
+			const fromFile = await billingIngestionService.loadFromFile(file);
+			allBillingRecords.update((prev) => billingIngestionService.mergeRecords(prev, fromFile));
+			fileMessage = `接入层: 已从文件 ${file.name} 导入 ${fromFile.length} 条记录`;
+		} catch (error) {
+			fileMessage = error instanceof Error ? error.message : '文件接入失败';
+		}
 		input.value = '';
 	};
 </script>
@@ -60,7 +66,9 @@
 <main class="mx-auto max-w-7xl space-y-5 bg-slate-100 p-4 md:p-8">
 	<section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
 		<h1 class="text-2xl font-bold text-slate-800">计费管理系统</h1>
-		<p class="mt-2 text-slate-600">支持 API 与文件上传双数据源，提供筛选、汇总与可视化报表。</p>
+		<p class="mt-2 text-slate-600">
+			通过统一数据接入层整合 API 与文件数据源，支持筛选、汇总与可视化报表。
+		</p>
 		<div class="mt-4 flex flex-wrap items-center gap-3">
 			<button
 				class="rounded-md bg-sky-600 px-4 py-2 text-white hover:bg-sky-700 disabled:opacity-60"
@@ -71,8 +79,8 @@
 				{loading ? '导入中...' : '加载 API 数据'}
 			</button>
 			<label class="cursor-pointer rounded-md border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50">
-				上传 CSV
-				<input type="file" class="hidden" accept=".csv" onchange={uploadCsv} />
+				上传 CSV / XLSX
+				<input type="file" class="hidden" accept=".csv,.xlsx,.xls" onchange={uploadFile} />
 			</label>
 			<button
 				class="rounded-md border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50"
@@ -83,7 +91,9 @@
 			</button>
 		</div>
 		<p class="mt-3 text-sm text-slate-500">{fileMessage}</p>
-		<p class="mt-1 text-xs text-slate-400">CSV 格式: date,category,amount,description</p>
+		<p class="mt-1 text-xs text-slate-400">
+			文件字段格式: date,category,amount,description (适用于 CSV 与 XLSX 首个工作表)
+		</p>
 	</section>
 
 	<FilterPanel filters={$billingFilters} onChange={updateFilters} />
